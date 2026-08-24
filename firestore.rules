@@ -1,0 +1,72 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthed() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthed()
+        && request.auth.token.email != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.token.email));
+    }
+
+    function pinOk() {
+      return isAuthed()
+        && request.resource.data.pinAttempt ==
+           get(/databases/$(database)/documents/config/settings).data.guruPin;
+    }
+
+    function kelasPinOk() {
+      return isAuthed()
+        && request.resource.data.kelasPinAttempt ==
+           get(/databases/$(database)/documents/kelasPins/$(request.resource.data.kelas)).data.pin;
+    }
+
+    // PIN per kelas, dikelola admin. Siswa tidak pernah membaca nilai
+    // aslinya — validasi terjadi lewat kelasPinOk() di dalam rule /groups.
+    match /kelasPins/{kelasName} {
+      allow read, write: if isAdmin();
+    }
+
+    // Daftar admin: dokumen ID = email belajar.id admin.
+    // Hanya admin yang ada boleh menambah admin baru.
+    // Seorang user boleh membaca dokumen dirinya sendiri untuk cek "apakah saya admin".
+    match /admins/{email} {
+      allow read: if isAuthed() && request.auth.token.email == email;
+      allow write: if isAdmin();
+    }
+
+    // Pengaturan sistem (PIN guru dll). Tidak pernah bisa dibaca langsung oleh
+    // klien — validasi PIN terjadi lewat get() di dalam rule (lihat pinOk()),
+    // jadi nilai PIN asli tidak pernah terkirim ke browser siswa/guru.
+    match /config/{doc} {
+      allow read, write: if isAdmin();
+    }
+
+    // Data kelompok (isian tugas tiap tahap). Siswa (anonymous auth) boleh
+    // menulis. Ini disengaja terbuka antar-kelompok dalam satu kelas — lihat
+    // catatan trade-off keamanan di SETUP.md. Hanya admin yang boleh menghapus.
+    match /groups/{groupId} {
+      allow read: if isAuthed();
+      allow create, update: if isAdmin() || kelasPinOk();
+      allow delete: if isAdmin();
+    }
+
+    // Skor papan lomba: guru (PIN benar) atau admin.
+    match /scores/{scoreId} {
+      allow read: if isAuthed();
+      allow write: if isAdmin() || pinOk();
+    }
+
+    // Penilaian/review guru per tahap: guru (PIN benar) atau admin.
+    // Guru TIDAK punya akses tulis ke /groups — jadi tidak bisa mengubah
+    // data asli yang diunggah siswa, sesuai kebutuhan "checker tanpa ubah".
+    match /reviews/{reviewId} {
+      allow read: if isAuthed();
+      allow write: if isAdmin() || pinOk();
+    }
+  }
+}
