@@ -55,6 +55,13 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Template dokumen (link Drive) per tahap — bisa dibaca semua peran,
+    // hanya admin yang bisa mengisi/mengubah.
+    match /templates/{stageId} {
+      allow read: if isAuthed();
+      allow write: if isAdmin();
+    }
+
     // Skor papan lomba: guru (PIN benar) atau admin.
     match /scores/{scoreId} {
       allow read: if isAuthed();
