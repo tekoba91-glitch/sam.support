@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { auth, db, googleProvider, SCHOOL_DOMAIN } from "./firebase.js";
 import { signInAnonymously, signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
-import { collection, doc, setDoc, deleteDoc, onSnapshot, getDoc } from "firebase/firestore";
+import { collection, doc, addDoc, setDoc, deleteDoc, onSnapshot, getDoc } from "firebase/firestore";
 
 const STAGES = [
   { id: "pembuka", label: "Foto Kondisi Awal", short: "Pembuka", mapel: "IPAS", color: "#8a6d3b", icon: "📷", lomba: false, hint: "Link foto kondisi awal area (ambil langsung dari kamera)" },
@@ -12,7 +12,7 @@ const STAGES = [
   { id: "spreadsheet", label: "Laporan Spreadsheet", short: "Spreadsheet", mapel: "Informatika", color: "#3d6b52", icon: "📊", lomba: false, hint: "Link Google Sheets" },
   { id: "laporanIndo", label: "Laporan Bahasa Indonesia", short: "Lap. Indonesia", mapel: "Bahasa Indonesia", color: "#7a4a3a", icon: "📝", lomba: true, hint: "Link dokumen laporan" },
   { id: "laporanInggris", label: "Laporan Bahasa Inggris", short: "Lap. Inggris", mapel: "Bahasa Inggris", color: "#4a5d7a", icon: "🌍", lomba: true, hint: "Link report document" },
-  { id: "video", label: "Video Presentasi", short: "Video", mapel: "Informatika", color: "#3d6b52", icon: "🎬", lomba: true, hint: "Link video (YouTube/Drive)" },
+  { id: "video", label: "Video Presentasi", short: "Video", mapel: "Informatika", color: "#3d6b52", icon: "🎬", lomba: true, hint: "Link video (YouTube/Drive/Instagram/TikTok)" },
   { id: "refleksi", label: "Refleksi Akhir", short: "Refleksi", mapel: "Refleksi", color: "#5c4a7a", icon: "💭", lomba: false, hint: "Link dokumentasi (opsional)", noLinkRequired: true },
 ];
 const LOMBA_CATS = STAGES.filter((s) => s.lomba);
@@ -37,7 +37,7 @@ function groupKey(kelas, kelompok) { return `${kelas.trim()}__${kelompok.trim()}
 function isValidLink(url, stageId) {
   try {
     const u = new URL(url);
-    if (stageId === "video") return /drive\.google\.com|classroom\.google\.com|youtube\.com|youtu\.be/.test(u.hostname);
+    if (stageId === "video") return /drive\.google\.com|classroom\.google\.com|youtube\.com|youtu\.be|instagram\.com|tiktok\.com/.test(u.hostname);
     if (stageId === "poster") return /drive\.google\.com|docs\.google\.com|classroom\.google\.com|canva\.com/.test(u.hostname);
     return /drive\.google\.com|docs\.google\.com|classroom\.google\.com/.test(u.hostname);
   } catch { return false; }
@@ -81,11 +81,16 @@ export default function App() {
   const [guruPin, setGuruPin] = useState(""); // disimpan di sesi guru, dikirim tiap tulis
   const [kelasSession, setKelasSession] = useState(null); // { kelas, pin }
   const [kelasPins, setKelasPins] = useState({});
+  const [kelasList, setKelasList] = useState({});
   const [templates, setTemplates] = useState({});
   const [toast, setToast] = useState(null);
   const [pinRole, setPinRole] = useState(null);
 
   function showToast(msg, kind = "ok") { setToast({ msg, kind }); setTimeout(() => setToast(null), 2800); }
+
+  // Sign-in anonim otomatis begitu app dibuka, supaya daftar kelas
+  // (kelasList) bisa dibaca di layar depan sebelum peran dipilih.
+  useEffect(() => { signInAnonymously(auth).catch(() => {}); }, []);
 
   // Auth listener
   useEffect(() => onAuthStateChanged(auth, async (u) => {
@@ -113,7 +118,10 @@ export default function App() {
     const unsubT = onSnapshot(collection(db, "templates"), (snap) => {
       const next = {}; snap.forEach((d) => (next[d.id] = d.data())); setTemplates(next);
     });
-    return () => { unsubG(); unsubS(); unsubR(); unsubT(); };
+    const unsubL = onSnapshot(collection(db, "kelasList"), (snap) => {
+      const next = {}; snap.forEach((d) => (next[d.id] = d.data())); setKelasList(next);
+    });
+    return () => { unsubG(); unsubS(); unsubR(); unsubT(); unsubL(); };
   }, [authUser]);
 
   useEffect(() => {
@@ -136,7 +144,19 @@ export default function App() {
     const prev = groups[gk] || { kelas, kelompok, stages: {} };
     await setDoc(doc(db, "groups", gk), { ...prev, kelasPinAttempt: kelasPin || "admin", stages: { ...prev.stages, [stageId]: entry } });
   }
-  async function saveKelasPin(kelas, pin) { await setDoc(doc(db, "kelasPins", kelas), { pin }); }
+  async function saveKelasPin(kelas, pin) {
+    await Promise.all([
+      setDoc(doc(db, "kelasPins", kelas), { pin }),
+      setDoc(doc(db, "kelasList", kelas), { kelas }),
+    ]);
+  }
+  async function verifyKelasPin(kelas, pin) {
+    await ensureAnon();
+    try {
+      await addDoc(collection(db, "kelasPinChecks"), { kelas, kelasPinAttempt: pin, waktu: new Date().toISOString() });
+      return true;
+    } catch (e) { return false; }
+  }
   async function saveTemplate(stageId, link) { await setDoc(doc(db, "templates", stageId), { link }); }
   async function deleteStageEntry(gk, stageId) {
     const prev = groups[gk]; if (!prev) return;
@@ -189,6 +209,8 @@ export default function App() {
         authUser={authUser}
         isAdmin={isAdmin}
         onEnterAdmin={() => { setRole("admin"); setPinRole(null); }}
+        kelasList={kelasList}
+        verifyKelasPin={verifyKelasPin}
       />
     );
   }
@@ -211,9 +233,9 @@ export default function App() {
           <button onClick={handleLogout} style={{ padding: "8px 14px", borderRadius: 999, border: "1px solid #ddd8c8", background: "#fff", fontSize: 12.5, fontWeight: 700, color: "#5a564c", cursor: "pointer" }}>Ganti Peran</button>
         </div>
 
-        {role === "siswa" && <SiswaView groupList={groupList} kelasSession={kelasSession} saveStageEntry={saveStageEntry} showToast={showToast} scores={scores} templates={templates} />}
+        {role === "siswa" && <SiswaView groupList={groupList} kelasSession={kelasSession} saveStageEntry={saveStageEntry} showToast={showToast} scores={scores} reviews={reviews} templates={templates} />}
         {role === "guru" && <GuruView groupList={groupList} guruMapel={guruMapel} guruPin={guruPin} saveReview={saveReview} saveScore={saveScore} reviews={reviews} scores={scores} showToast={showToast} />}
-        {role === "admin" && isAdmin && <AdminView groupList={groupList} saveStageEntry={saveStageEntry} deleteStageEntry={deleteStageEntry} deleteGroup={deleteGroup} saveScore={saveScore} saveSettings={saveSettings} addAdmin={addAdmin} saveKelasPin={saveKelasPin} kelasPins={kelasPins} saveTemplate={saveTemplate} templates={templates} scores={scores} authUser={authUser} showToast={showToast} />}
+        {role === "admin" && isAdmin && <AdminView groupList={groupList} saveStageEntry={saveStageEntry} deleteStageEntry={deleteStageEntry} deleteGroup={deleteGroup} saveScore={saveScore} saveSettings={saveSettings} addAdmin={addAdmin} saveKelasPin={saveKelasPin} kelasPins={kelasPins} saveTemplate={saveTemplate} templates={templates} scores={scores} reviews={reviews} authUser={authUser} showToast={showToast} />}
         {role === "admin" && !isAdmin && <EmptyState text="Akun ini belum terdaftar sebagai admin. Minta admin yang sudah ada menambahkan email kamu di tab Pengaturan." />}
       </div>
 
@@ -223,7 +245,7 @@ export default function App() {
 }
 
 /* ================= LANDING ================= */
-function Landing({ onWantSiswa, onWantAdmin, onWantGuru, pinRole, onClosePin, onSiswaSuccess, onGuruSuccess, onAdminLogin, authUser, isAdmin, onEnterAdmin }) {
+function Landing({ onWantSiswa, onWantAdmin, onWantGuru, pinRole, onClosePin, onSiswaSuccess, onGuruSuccess, onAdminLogin, authUser, isAdmin, onEnterAdmin, kelasList, verifyKelasPin }) {
   return (
     <div style={{ fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", background: "#f6f4ee", minHeight: "100%", color: "#2b2b26" }}>
       <style>{`* { box-sizing: border-box; } input, button { font-family: inherit; } .strata { height: 6px; display: flex; } .strata > div { flex: 1; }`}</style>
@@ -241,15 +263,28 @@ function Landing({ onWantSiswa, onWantAdmin, onWantGuru, pinRole, onClosePin, on
         </div>
       </div>
 
-      {pinRole === "siswa" && <KelasPinModal onClose={onClosePin} onSuccess={onSiswaSuccess} />}
+      {pinRole === "siswa" && <KelasPinModal onClose={onClosePin} onSuccess={onSiswaSuccess} kelasList={kelasList} verifyKelasPin={verifyKelasPin} />}
       {pinRole === "guru" && <GuruPinModal onClose={onClosePin} onSuccess={onGuruSuccess} />}
       {pinRole === "admin" && <AdminLoginModal onClose={onClosePin} onLogin={onAdminLogin} authUser={authUser} isAdmin={isAdmin} onEnter={onEnterAdmin} />}
     </div>
   );
 }
-function KelasPinModal({ onClose, onSuccess }) {
-  const [kelas, setKelas] = useState("");
+function KelasPinModal({ onClose, onSuccess, kelasList, verifyKelasPin }) {
+  const kelasNames = Object.keys(kelasList || {}).sort();
+  const [kelas, setKelas] = useState(kelasNames[0] || "");
   const [pin, setPin] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function submit() {
+    if (!kelas.trim() || !pin.trim()) return;
+    setChecking(true); setErr("");
+    const ok = await verifyKelasPin(kelas.trim(), pin.trim());
+    setChecking(false);
+    if (ok) onSuccess(kelas.trim(), pin.trim());
+    else setErr("PIN salah untuk kelas ini. Tanyakan lagi ke wali kelas.");
+  }
+
   return (
     <Sheet onClose={onClose} width={420}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -257,10 +292,21 @@ function KelasPinModal({ onClose, onSuccess }) {
         <button onClick={onClose} style={{ border: "none", background: "#eae6da", width: 28, height: 28, borderRadius: "50%", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>✕</button>
       </div>
       <div style={{ display: "grid", gap: 12 }}>
-        <Field label="Kelas"><input value={kelas} onChange={(e) => setKelas(e.target.value)} placeholder="cth. X TKJ 1" style={inputStyle} autoFocus /></Field>
-        <Field label="PIN Kelas"><input type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="Tanyakan ke wali kelas" style={inputStyle} /></Field>
+        {kelasNames.length > 0 ? (
+          <Field label="Kelas">
+            <select value={kelas} onChange={(e) => { setKelas(e.target.value); setErr(""); }} style={inputStyle}>
+              {kelasNames.map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+          </Field>
+        ) : (
+          <div style={{ fontSize: 12.5, color: "#b3453a", background: "#f7e6e3", padding: "10px 12px", borderRadius: 8 }}>Belum ada kelas terdaftar. Admin perlu menambahkan kelas dulu di tab Pengaturan.</div>
+        )}
+        <Field label="PIN Kelas">
+          <input type="password" inputMode="numeric" value={pin} onChange={(e) => { setPin(e.target.value); setErr(""); }} placeholder="Tanyakan ke wali kelas" style={{ ...inputStyle, borderColor: err ? "#b3453a" : "#ddd8c8" }} />
+          {err && <div style={{ fontSize: 12, color: "#b3453a", marginTop: 5 }}>{err}</div>}
+        </Field>
         <p style={{ fontSize: 11.5, color: "#a8a396" }}>PIN ini sama untuk seluruh kelompok di kelas kamu hari ini, dibagikan wali kelas saat orientasi.</p>
-        <button onClick={() => kelas.trim() && pin.trim() && onSuccess(kelas.trim(), pin.trim())} disabled={!kelas.trim() || !pin.trim()} style={{ padding: "12px 16px", borderRadius: 10, border: "none", background: kelas.trim() && pin.trim() ? "#3d6b52" : "#ccc8ba", color: "#fff", fontWeight: 700, fontSize: 14, cursor: kelas.trim() && pin.trim() ? "pointer" : "default" }}>Masuk</button>
+        <button onClick={submit} disabled={!kelas.trim() || !pin.trim() || checking} style={{ padding: "12px 16px", borderRadius: 10, border: "none", background: kelas.trim() && pin.trim() && !checking ? "#3d6b52" : "#ccc8ba", color: "#fff", fontWeight: 700, fontSize: 14, cursor: kelas.trim() && pin.trim() && !checking ? "pointer" : "default" }}>{checking ? "Memeriksa PIN..." : "Masuk"}</button>
       </div>
     </Sheet>
   );
@@ -318,7 +364,7 @@ function AdminLoginModal({ onClose, onLogin, authUser, isAdmin, onEnter }) {
 }
 
 /* ================= SISWA ================= */
-function SiswaView({ groupList, kelasSession, saveStageEntry, showToast, scores, templates }) {
+function SiswaView({ groupList, kelasSession, saveStageEntry, showToast, scores, reviews, templates }) {
   const [tab, setTab] = useState("isi");
   const kelas = kelasSession.kelas;
   const [kelompok, setKelompok] = useState("");
@@ -336,7 +382,7 @@ function SiswaView({ groupList, kelasSession, saveStageEntry, showToast, scores,
     e.preventDefault();
     const linkRequired = !currentStage.noLinkRequired;
     if (!kelompok.trim()) return showToast("Isi nama kelompok dulu ya", "err");
-    if (linkRequired && !link.trim()) return showToast("Link bukti wajib diisi untuk tahap ini", "err");
+    if (linkRequired && !link.trim()) return showToast("Upload file atau isi link bukti untuk tahap ini", "err");
     if (currentStage.noLinkRequired && !catatan.trim()) return showToast("Tulis refleksinya di kolom catatan ya", "err");
     if (link.trim() && !isValidLink(link.trim(), stageId)) return setLinkErr("Format link tidak sesuai untuk tahap ini");
     if (!walikelasHadir) return showToast("Verifikasi kehadiran wali kelas wajib dicentang", "err");
@@ -421,7 +467,18 @@ function SiswaView({ groupList, kelasSession, saveStageEntry, showToast, scores,
       )}
 
       {tab === "progress" && <GroupBoard groupList={ownGroups} mode="view" />}
-      {tab === "lomba" && <LombaTabs cats={LOMBA_CATS} groupList={ownGroups} scores={scores} editable={false} />}
+      {tab === "lomba" && (
+        <div style={{ display: "grid", gap: 20 }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>🏆 Peringkat Keseluruhan Kelas</div>
+            <PeringkatBoard groupList={ownGroups} scores={scores} reviews={reviews} />
+          </div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>Papan Lomba per Kategori</div>
+            <LombaTabs cats={LOMBA_CATS} groupList={ownGroups} scores={scores} editable={false} />
+          </div>
+        </div>
+      )}
 
       {guideStage && <GuideSheet stage={stageOf(guideStage)} index={STAGES.findIndex((s) => s.id === guideStage)} onClose={() => setGuideStage(null)} onUse={() => { setStageId(guideStage); setGuideStage(null); }} />}
     </div>
@@ -521,6 +578,38 @@ function LombaTabs({ cats, groupList, scores, editable, onScore }) {
   );
 }
 
+/* ================= SHARED: PERINGKAT KESELURUHAN ================= */
+function computeOverallRanking(groupList, scores, reviews) {
+  return groupList.map((g) => {
+    const gk = groupKey(g.kelas, g.kelompok);
+    const nums = [];
+    Object.values(reviews || {}).forEach((r) => { if (r.gk === gk && r.skor) nums.push(Number(r.skor) * 25); });
+    Object.values(scores || {}).forEach((s) => { if (s.gk === gk && s.score !== undefined && s.score !== "") { const n = Number(s.score); if (!isNaN(n)) nums.push(n); } });
+    const avg = nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+    return { g, gk, avg, count: nums.length };
+  }).sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+}
+
+function PeringkatBoard({ groupList, scores, reviews }) {
+  const ranked = useMemo(() => computeOverallRanking(groupList, scores, reviews), [groupList, scores, reviews]);
+  const medals = ["🥇", "🥈", "🥉"];
+  if (groupList.length === 0) return <EmptyState text="Belum ada kelompok untuk diperingkat." />;
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <div style={{ fontSize: 11.5, color: "#8a857a" }}>Digabung dari seluruh skor guru per tahap (rubrik 1-4) dan skor papan lomba (0-100), dirata-ratakan jadi satu skala 0-100.</div>
+      {ranked.map(({ g, gk, avg, count }, idx) => (
+        <div key={gk} style={{ background: "#fff", border: "1px solid #e4e0d3", borderRadius: 14, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 14 }}>{avg !== null && idx < 3 ? medals[idx] + " " : ""}{g.kelas} · {g.kelompok}</div>
+            <div style={{ fontSize: 11.5, color: "#8a857a" }}>{count} penilaian tercatat</div>
+          </div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: avg !== null ? "#3d6b52" : "#a8a396" }}>{avg !== null ? avg.toFixed(1) : "—"}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ================= GURU ================= */
 function GuruView({ groupList, guruMapel, guruPin, saveReview, saveScore, reviews, scores, showToast }) {
   const [tab, setTab] = useState("tinjau");
@@ -544,6 +633,7 @@ function GuruView({ groupList, guruMapel, guruPin, saveReview, saveScore, review
       <div style={{ display: "flex", gap: 4, background: "#eae6da", padding: 4, borderRadius: 12, marginBottom: 18, overflowX: "auto" }}>
         <button onClick={() => setTab("tinjau")} style={{ flex: "1 0 auto", padding: "10px 14px", borderRadius: 9, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13, background: tab === "tinjau" ? "#2b2b26" : "transparent", color: tab === "tinjau" ? "#f6f4ee" : "#5a564c" }}>Tinjau Submission</button>
         {showLomba && <button onClick={() => setTab("lomba")} style={{ flex: "1 0 auto", padding: "10px 14px", borderRadius: 9, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13, background: tab === "lomba" ? "#2b2b26" : "transparent", color: tab === "lomba" ? "#f6f4ee" : "#5a564c" }}>Papan Lomba</button>}
+        <button onClick={() => setTab("peringkat")} style={{ flex: "1 0 auto", padding: "10px 14px", borderRadius: 9, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13, background: tab === "peringkat" ? "#2b2b26" : "transparent", color: tab === "peringkat" ? "#f6f4ee" : "#5a564c" }}>🏆 Peringkat</button>
       </div>
       <div style={{ fontSize: 12, color: "#8a857a", marginBottom: 12, background: "#fff", border: "1px dashed #ddd8c8", borderRadius: 10, padding: "8px 12px" }}>Anda meninjau sebagai <strong>{guruMapel}</strong>. Data siswa bersifat baca-saja.</div>
 
@@ -562,6 +652,7 @@ function GuruView({ groupList, guruMapel, guruPin, saveReview, saveScore, review
 
       {tab === "tinjau" && <GroupBoard groupList={groupList} mode="guru" filterStages={stages} onBadgeClick={(g, s) => setReviewTarget({ g, s })} />}
       {tab === "lomba" && showLomba && <LombaTabs cats={cats} groupList={groupList} scores={scores} editable={true} onScore={(gk, catId, field, value) => saveScore(gk, catId, field, value, guruPin)} />}
+      {tab === "peringkat" && <PeringkatBoard groupList={groupList} scores={scores} reviews={reviews} />}
 
       {reviewTarget && (
         <ReviewSheet group={reviewTarget.g} stage={reviewTarget.s} guruMapel={guruMapel}
@@ -603,7 +694,7 @@ function ReviewSheet({ group, stage, guruMapel, existing, onClose, onSave }) {
 }
 
 /* ================= ADMIN ================= */
-function AdminView({ groupList, saveStageEntry, deleteStageEntry, deleteGroup, saveScore, saveSettings, addAdmin, saveKelasPin, kelasPins, saveTemplate, templates, scores, authUser, showToast }) {
+function AdminView({ groupList, saveStageEntry, deleteStageEntry, deleteGroup, saveScore, saveSettings, addAdmin, saveKelasPin, kelasPins, saveTemplate, templates, scores, reviews, authUser, showToast }) {
   const [tab, setTab] = useState("kelompok");
   const [editTarget, setEditTarget] = useState(null);
   const [guruPin, setGuruPin] = useState("");
@@ -616,7 +707,7 @@ function AdminView({ groupList, saveStageEntry, deleteStageEntry, deleteGroup, s
   return (
     <div>
       <div style={{ display: "flex", gap: 4, background: "#eae6da", padding: 4, borderRadius: 12, marginBottom: 18, overflowX: "auto" }}>
-        {[{ id: "kelompok", label: "Kelola Kelompok" }, { id: "data", label: "Semua Data" }, { id: "lomba", label: "Papan Lomba" }, { id: "pengaturan", label: "Pengaturan" }].map((t) => (
+        {[{ id: "kelompok", label: "Kelola Kelompok" }, { id: "data", label: "Semua Data" }, { id: "lomba", label: "Papan Lomba" }, { id: "peringkat", label: "🏆 Peringkat" }, { id: "pengaturan", label: "Pengaturan" }].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: "1 0 auto", padding: "10px 14px", borderRadius: 9, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13, background: tab === t.id ? "#2b2b26" : "transparent", color: tab === t.id ? "#f6f4ee" : "#5a564c" }}>{t.label}</button>
         ))}
       </div>
@@ -632,8 +723,16 @@ function AdminView({ groupList, saveStageEntry, deleteStageEntry, deleteGroup, s
         </div>
       ))}
 
-      {tab === "data" && <GroupBoard groupList={groupList} mode="admin" onBadgeClick={(g, s) => setEditTarget({ g, s })} />}
+      {tab === "data" && (
+        <div>
+          <button onClick={() => exportRekapCSV(groupList)} disabled={groupList.length === 0} style={{ marginBottom: 14, padding: "10px 16px", borderRadius: 10, border: "1px solid #ddd8c8", background: "#fff", fontWeight: 700, fontSize: 12.5, color: "#2b2b26", cursor: groupList.length === 0 ? "default" : "pointer", opacity: groupList.length === 0 ? 0.5 : 1 }}>
+            ⬇️ Export Rekap CSV (semua kelompok × semua tahap)
+          </button>
+          <GroupBoard groupList={groupList} mode="admin" onBadgeClick={(g, s) => setEditTarget({ g, s })} />
+        </div>
+      )}
       {tab === "lomba" && <LombaTabs cats={LOMBA_CATS} groupList={groupList} scores={scores} editable={true} onScore={(gk, catId, field, value) => saveScore(gk, catId, field, value, "admin")} />}
+      {tab === "peringkat" && <PeringkatBoard groupList={groupList} scores={scores} reviews={reviews} />}
 
       {tab === "pengaturan" && (
         <div style={{ background: "#fff", border: "1px solid #e4e0d3", borderRadius: 16, padding: 20, display: "grid", gap: 20 }}>
@@ -743,4 +842,35 @@ function TemplateRow({ stage, existing, onSave, showToast }) {
       </button>
     </div>
   );
+}
+
+function exportRekapCSV(groupList) {
+  const header = ["Kelas", "Kelompok", "Tahap", "Mapel", "Link", "Catatan", "Diverifikasi Wali Kelas", "Waktu Submit"];
+  const rows = [];
+  groupList.forEach((g) => {
+    STAGES.forEach((s) => {
+      const en = g.stages?.[s.id];
+      if (!en) return;
+      rows.push([
+        g.kelas,
+        g.kelompok,
+        s.label,
+        s.mapel,
+        en.link || "",
+        en.catatan || "",
+        en.walikelasHadir ? "Ya" : "Tidak",
+        en.waktu ? new Date(en.waktu).toLocaleString("id-ID") : "",
+      ]);
+    });
+  });
+  const csv = [header, ...rows]
+    .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "rekap-lengkap-kelas-x.csv";
+  a.click();
+  URL.revokeObjectURL(url);
 }
