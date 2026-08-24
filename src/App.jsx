@@ -5,7 +5,7 @@ import { collection, doc, setDoc, deleteDoc, onSnapshot, getDoc } from "firebase
 
 const STAGES = [
   { id: "pembuka", label: "Foto Kondisi Awal", short: "Pembuka", mapel: "IPAS", color: "#8a6d3b", icon: "📷", lomba: false, hint: "Link foto kondisi awal area (ambil langsung dari kamera)" },
-  { id: "kebersihan", label: "Pemetaan Kebersihan", short: "Kebersihan", mapel: "IPAS", color: "#8a6d3b", icon: "🧹", lomba: false, hint: "Link foto kondisi kebersihan kelas & lingkungan sekolah", extra: "kebersihan" },
+  { id: "kebersihan", label: "Pemetaan Kebersihan", short: "Kebersihan", mapel: "IPAS", color: "#8a6d3b", icon: "🧹", lomba: false, hint: "Link foto kondisi kebersihan kelas & lingkungan sekolah" },
   { id: "bahan", label: "Bukti Bahan Baku", short: "Bahan", mapel: "IPAS", color: "#8a6d3b", icon: "🌿", lomba: false, hint: "Link foto bahan di Google Drive" },
   { id: "poster", label: "Poster Edukasi", short: "Poster", mapel: "Informatika", color: "#3d6b52", icon: "🖼️", lomba: true, hint: "Link poster (Drive/Canva)" },
   { id: "kandungan", label: "Perhitungan Kandungan", short: "Kandungan", mapel: "IPAS", color: "#8a6d3b", icon: "🧪", lomba: false, hint: "Link data perhitungan (opsional)", extra: "kandungan" },
@@ -18,6 +18,19 @@ const STAGES = [
 const LOMBA_CATS = STAGES.filter((s) => s.lomba);
 const MAPEL_OPTIONS = ["IPAS", "Informatika", "Bahasa Indonesia", "Bahasa Inggris", "Wali Kelas", "Koordinator"];
 const SKOR_LABELS = { 1: "Perlu Bimbingan", 2: "Cukup", 3: "Baik", 4: "Sangat Baik" };
+
+const GUIDES = {
+  pembuka: { steps: ["Buka kamera HP langsung di lokasi sebelum mulai bekerja", "Ambil foto kondisi awal area apa adanya", "Unggah foto ke folder Drive kelompok"], out: "Link foto kondisi awal ditempel di form" },
+  kebersihan: { steps: ["Susuri kelas dan area lingkungan sekolah tanggung jawab kelompok", "Foto titik yang masih kotor/tidak rapi sebagai bukti", "Tulis deskripsi kondisi yang kalian amati (bukan skor) — misalnya area mana yang kotor, jenis sampah apa yang paling banyak"], out: "Link foto + deskripsi kondisi ditempel di form. Skor kebersihan akan diberikan guru/wali kelas berdasarkan bukti ini." },
+  bahan: { steps: ["Amati area taman, halaman, kantin", "Pilah bahan secara ketat, buang material anorganik", "Foto bahan yang sudah dipilah"], out: "Link foto bahan ditempel di form" },
+  poster: { steps: ["Rangkum jenis dan cara memilah sampah", "Rancang poster dengan Canva/aplikasi desain", "Sertakan target lokasi pemasangan"], out: "Link poster ditempel di form, masuk papan lomba" },
+  kandungan: { steps: ["Timbang total berat bahan yang sudah dicacah", "Hitung estimasi rasio C:N", "Catat kadar air perkiraan"], out: "Isi berat total, rasio C:N, kadar air di form — ini data pengukuran kalian sendiri" },
+  spreadsheet: { steps: ["Buat tabel data berat & komposisi per jenis sampah", "Tambahkan rumus persentase & grafik tren", "Update data tiap minggu monitoring"], out: "Link Google Sheets ditempel di form" },
+  laporanIndo: { steps: ["Tulis laporan proses secara naratif", "Gunakan struktur laporan ilmiah sederhana", "Periksa ejaan & tata bahasa"], out: "Link laporan ditempel di form, masuk papan lomba" },
+  laporanInggris: { steps: ["Tulis ringkasan laporan dalam bahasa Inggris", "Fokus istilah teknis kompos yang tepat", "Minta review teman sekelompok"], out: "Link report ditempel di form, masuk papan lomba" },
+  video: { steps: ["Susun naskah singkat mencakup semua tahap", "Rekam presentasi kelompok", "Edit video ringkas, maksimal 5 menit"], out: "Link video ditempel di form, masuk papan lomba" },
+  refleksi: { steps: ["Diskusikan apa yang berhasil dan kendalanya", "Tulis refleksi singkat & rencana perbaikan", "Minta wali kelas membaca dan menanggapi"], out: "Tulis refleksi di kolom catatan, link opsional" },
+};
 
 function stageOf(id) { return STAGES.find((s) => s.id === id); }
 function groupKey(kelas, kelompok) { return `${kelas.trim()}__${kelompok.trim()}`.replace(/[/\\]/g, "-"); }
@@ -68,6 +81,7 @@ export default function App() {
   const [guruPin, setGuruPin] = useState(""); // disimpan di sesi guru, dikirim tiap tulis
   const [kelasSession, setKelasSession] = useState(null); // { kelas, pin }
   const [kelasPins, setKelasPins] = useState({});
+  const [templates, setTemplates] = useState({});
   const [toast, setToast] = useState(null);
   const [pinRole, setPinRole] = useState(null);
 
@@ -96,7 +110,10 @@ export default function App() {
     const unsubR = onSnapshot(collection(db, "reviews"), (snap) => {
       const next = {}; snap.forEach((d) => (next[d.id] = d.data())); setReviews(next);
     });
-    return () => { unsubG(); unsubS(); unsubR(); };
+    const unsubT = onSnapshot(collection(db, "templates"), (snap) => {
+      const next = {}; snap.forEach((d) => (next[d.id] = d.data())); setTemplates(next);
+    });
+    return () => { unsubG(); unsubS(); unsubR(); unsubT(); };
   }, [authUser]);
 
   useEffect(() => {
@@ -120,6 +137,7 @@ export default function App() {
     await setDoc(doc(db, "groups", gk), { ...prev, kelasPinAttempt: kelasPin || "admin", stages: { ...prev.stages, [stageId]: entry } });
   }
   async function saveKelasPin(kelas, pin) { await setDoc(doc(db, "kelasPins", kelas), { pin }); }
+  async function saveTemplate(stageId, link) { await setDoc(doc(db, "templates", stageId), { link }); }
   async function deleteStageEntry(gk, stageId) {
     const prev = groups[gk]; if (!prev) return;
     const nextStages = { ...prev.stages }; delete nextStages[stageId];
@@ -193,9 +211,9 @@ export default function App() {
           <button onClick={handleLogout} style={{ padding: "8px 14px", borderRadius: 999, border: "1px solid #ddd8c8", background: "#fff", fontSize: 12.5, fontWeight: 700, color: "#5a564c", cursor: "pointer" }}>Ganti Peran</button>
         </div>
 
-        {role === "siswa" && <SiswaView groupList={groupList} kelasSession={kelasSession} saveStageEntry={saveStageEntry} showToast={showToast} scores={scores} />}
+        {role === "siswa" && <SiswaView groupList={groupList} kelasSession={kelasSession} saveStageEntry={saveStageEntry} showToast={showToast} scores={scores} templates={templates} />}
         {role === "guru" && <GuruView groupList={groupList} guruMapel={guruMapel} guruPin={guruPin} saveReview={saveReview} saveScore={saveScore} reviews={reviews} scores={scores} showToast={showToast} />}
-        {role === "admin" && isAdmin && <AdminView groupList={groupList} saveStageEntry={saveStageEntry} deleteStageEntry={deleteStageEntry} deleteGroup={deleteGroup} saveScore={saveScore} saveSettings={saveSettings} addAdmin={addAdmin} saveKelasPin={saveKelasPin} kelasPins={kelasPins} scores={scores} authUser={authUser} showToast={showToast} />}
+        {role === "admin" && isAdmin && <AdminView groupList={groupList} saveStageEntry={saveStageEntry} deleteStageEntry={deleteStageEntry} deleteGroup={deleteGroup} saveScore={saveScore} saveSettings={saveSettings} addAdmin={addAdmin} saveKelasPin={saveKelasPin} kelasPins={kelasPins} saveTemplate={saveTemplate} templates={templates} scores={scores} authUser={authUser} showToast={showToast} />}
         {role === "admin" && !isAdmin && <EmptyState text="Akun ini belum terdaftar sebagai admin. Minta admin yang sudah ada menambahkan email kamu di tab Pengaturan." />}
       </div>
 
@@ -300,18 +318,19 @@ function AdminLoginModal({ onClose, onLogin, authUser, isAdmin, onEnter }) {
 }
 
 /* ================= SISWA ================= */
-function SiswaView({ groupList, kelasSession, saveStageEntry, showToast, scores }) {
+function SiswaView({ groupList, kelasSession, saveStageEntry, showToast, scores, templates }) {
   const [tab, setTab] = useState("isi");
   const kelas = kelasSession.kelas;
   const [kelompok, setKelompok] = useState("");
   const [stageId, setStageId] = useState(STAGES[0].id);
   const [link, setLink] = useState(""); const [catatan, setCatatan] = useState("");
   const [beratTotal, setBeratTotal] = useState(""); const [rasioCN, setRasioCN] = useState(""); const [kadarAir, setKadarAir] = useState("");
-  const [skorKelas, setSkorKelas] = useState(""); const [skorLingkungan, setSkorLingkungan] = useState("");
   const [walikelasHadir, setWalikelasHadir] = useState(false);
   const [linkErr, setLinkErr] = useState(""); const [saving, setSaving] = useState(false);
+  const [guideStage, setGuideStage] = useState(null);
   const currentStage = stageOf(stageId);
   const ownGroups = useMemo(() => groupList.filter((g) => g.kelas === kelas), [groupList, kelas]);
+  const template = templates?.[stageId];
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -325,10 +344,9 @@ function SiswaView({ groupList, kelasSession, saveStageEntry, showToast, scores 
     const gk = groupKey(kelas, kelompok);
     const entry = { link: link.trim(), catatan: catatan.trim(), walikelasHadir: true, waktu: new Date().toISOString() };
     if (stageId === "kandungan") Object.assign(entry, { beratTotal, rasioCN, kadarAir });
-    if (stageId === "kebersihan") Object.assign(entry, { skorKelas, skorLingkungan });
     try { await saveStageEntry(gk, kelas, kelompok.trim(), stageId, entry, kelasSession.pin); showToast(`Tahap "${currentStage.label}" tersimpan ✓`); }
     catch { showToast("Gagal menyimpan — PIN kelas salah atau koneksi bermasalah", "err"); }
-    setSaving(false); setLink(""); setCatatan(""); setBeratTotal(""); setRasioCN(""); setKadarAir(""); setSkorKelas(""); setSkorLingkungan(""); setWalikelasHadir(false);
+    setSaving(false); setLink(""); setCatatan(""); setBeratTotal(""); setRasioCN(""); setKadarAir(""); setWalikelasHadir(false);
   }
 
   return (
@@ -343,14 +361,25 @@ function SiswaView({ groupList, kelasSession, saveStageEntry, showToast, scores 
         <div style={{ display: "grid", gap: 16 }}>
           <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
             {STAGES.map((s, i) => (
-              <button key={s.id} onClick={() => setStageId(s.id)} style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6, padding: "8px 12px", borderRadius: 999, border: `1.5px solid ${stageId === s.id ? s.color : "#ddd8c8"}`, background: stageId === s.id ? s.color : "#fff", color: stageId === s.id ? "#fff" : "#5a564c", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
+              <div key={s.id} onClick={() => setStageId(s.id)} style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6, padding: "8px 8px 8px 12px", borderRadius: 999, border: `1.5px solid ${stageId === s.id ? s.color : "#ddd8c8"}`, background: stageId === s.id ? s.color : "#fff", color: stageId === s.id ? "#fff" : "#5a564c", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
                 <span>{s.icon}</span><span>{i + 1}. {s.short}</span>
-              </button>
+                <button type="button" onClick={(ev) => { ev.stopPropagation(); setGuideStage(s.id); }} title="Lihat panduan" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, borderRadius: "50%", border: "none", background: stageId === s.id ? "rgba(255,255,255,0.25)" : "#eae6da", color: stageId === s.id ? "#fff" : "#5a564c", fontSize: 11, fontWeight: 800, cursor: "pointer", flexShrink: 0 }}>i</button>
+              </div>
             ))}
           </div>
 
           <form onSubmit={handleSubmit} style={{ background: "#fff", border: "1px solid #e4e0d3", borderRadius: 16, padding: 20, display: "grid", gap: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontSize: 20 }}>{currentStage.icon}</span><div><div style={{ fontWeight: 800, fontSize: 15.5 }}>{currentStage.label}</div><div style={{ fontSize: 12, color: currentStage.color, fontWeight: 700 }}>{currentStage.mapel}</div></div></div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 20 }}>{currentStage.icon}</span>
+              <div style={{ flex: 1 }}><div style={{ fontWeight: 800, fontSize: 15.5 }}>{currentStage.label}</div><div style={{ fontSize: 12, color: currentStage.color, fontWeight: 700 }}>{currentStage.mapel}</div></div>
+              <button type="button" onClick={() => setGuideStage(stageId)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 999, border: `1px solid ${currentStage.color}`, background: "#fff", color: currentStage.color, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Lihat panduan</button>
+            </div>
+
+            {template?.link && (
+              <a href={template.link} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", gap: 8, background: "#eaf1ec", border: "1px solid #c7dccd", borderRadius: 10, padding: "10px 12px", textDecoration: "none", color: "#3d6b52", fontSize: 13, fontWeight: 700 }}>
+                📄 Buka template contoh untuk tahap ini →
+              </a>
+            )}
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <Field label="Kelas"><input value={kelas} disabled style={{ ...inputStyle, background: "#eae6da", color: "#8a857a" }} /></Field>
@@ -370,18 +399,16 @@ function SiswaView({ groupList, kelasSession, saveStageEntry, showToast, scores 
                 <Field label="Kadar Air (%)"><input value={kadarAir} onChange={(e) => setKadarAir(e.target.value)} style={inputStyle} /></Field>
               </div>
             )}
-            {stageId === "kebersihan" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <Field label="Skor Kebersihan Kelas (1-5)"><input value={skorKelas} onChange={(e) => setSkorKelas(e.target.value)} style={inputStyle} /></Field>
-                <Field label="Skor Kebersihan Lingkungan (1-5)"><input value={skorLingkungan} onChange={(e) => setSkorLingkungan(e.target.value)} style={inputStyle} /></Field>
-              </div>
-            )}
+            {stageId === "pembuka" && (<div style={{ fontSize: 12.5, color: "#8a6d3b", background: "#8a6d3b1a", padding: "8px 12px", borderRadius: 8 }}>📷 Ambil foto langsung dari kamera HP di lokasi, lalu unggah ke Drive dan tempel linknya di bawah.</div>)}
 
             <Field label={currentStage.hint}>
               <input value={link} onChange={(e) => { setLink(e.target.value); if (linkErr) setLinkErr(""); }} placeholder="https://..." style={{ ...inputStyle, borderColor: linkErr ? "#b3453a" : "#ddd8c8" }} />
               {linkErr && <div style={{ fontSize: 12, color: "#b3453a", marginTop: 5 }}>{linkErr}</div>}
             </Field>
-            <Field label={stageId === "refleksi" ? "Refleksi kelompok" : "Catatan (opsional)"}><textarea value={catatan} onChange={(e) => setCatatan(e.target.value)} rows={stageId === "refleksi" ? 4 : 2} style={{ ...inputStyle, resize: "vertical" }} /></Field>
+            <Field label={stageId === "refleksi" ? "Refleksi kelompok" : stageId === "kebersihan" ? "Deskripsi kondisi yang kalian amati" : "Catatan (opsional)"}>
+              <textarea value={catatan} onChange={(e) => setCatatan(e.target.value)} rows={stageId === "refleksi" ? 4 : 2} placeholder={stageId === "kebersihan" ? "Contoh: area dekat kantin masih banyak sampah plastik, taman belakang cukup bersih tapi ada daun kering menumpuk..." : ""} style={{ ...inputStyle, resize: "vertical" }} />
+            </Field>
+            {stageId === "kebersihan" && (<div style={{ fontSize: 11.5, color: "#8a857a" }}>Skor kebersihan akan diberikan oleh guru/wali kelas berdasarkan foto dan deskripsi ini — bukan dinilai sendiri.</div>)}
 
             <label style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#eae6da", padding: "10px 12px", borderRadius: 10, cursor: "pointer" }}>
               <input type="checkbox" checked={walikelasHadir} onChange={(e) => setWalikelasHadir(e.target.checked)} style={{ marginTop: 2 }} />
@@ -395,7 +422,29 @@ function SiswaView({ groupList, kelasSession, saveStageEntry, showToast, scores 
 
       {tab === "progress" && <GroupBoard groupList={ownGroups} mode="view" />}
       {tab === "lomba" && <LombaTabs cats={LOMBA_CATS} groupList={ownGroups} scores={scores} editable={false} />}
+
+      {guideStage && <GuideSheet stage={stageOf(guideStage)} index={STAGES.findIndex((s) => s.id === guideStage)} onClose={() => setGuideStage(null)} onUse={() => { setStageId(guideStage); setGuideStage(null); }} />}
     </div>
+  );
+}
+
+function GuideSheet({ stage, index, onClose, onUse }) {
+  const guide = GUIDES[stage.id];
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 22 }}>{stage.icon}</span>
+          <div><div style={{ fontSize: 11, fontWeight: 700, color: "#a8a396" }}>Tahap {index + 1} dari {STAGES.length}</div><div style={{ fontWeight: 800, fontSize: 17 }}>{stage.label}</div></div>
+        </div>
+        <button onClick={onClose} style={{ border: "none", background: "#eae6da", width: 28, height: 28, borderRadius: "50%", fontSize: 14, fontWeight: 700, color: "#5a564c", cursor: "pointer", flexShrink: 0 }}>✕</button>
+      </div>
+      <span style={{ display: "inline-block", fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, background: stage.color + "1a", color: stage.color, margin: "8px 0 16px" }}>{stage.mapel}</span>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: "#5a564c", marginBottom: 8 }}>Langkah kerja</div>
+      <ol style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 8 }}>{guide.steps.map((step, i) => (<li key={i} style={{ fontSize: 14, color: "#2b2b26", lineHeight: 1.5 }}>{step}</li>))}</ol>
+      <div style={{ marginTop: 16, padding: "12px 14px", background: "#eae6da", borderRadius: 10, fontSize: 13, color: "#2b2b26", lineHeight: 1.5 }}><strong>Bukti yang dikumpulkan:</strong> {guide.out}</div>
+      <button onClick={onUse} style={{ marginTop: 16, width: "100%", padding: "13px 16px", borderRadius: 10, border: "none", background: stage.color, color: "#fff", fontWeight: 700, fontSize: 14.5, cursor: "pointer" }}>Isi tahap ini sekarang</button>
+    </Sheet>
   );
 }
 
@@ -554,7 +603,7 @@ function ReviewSheet({ group, stage, guruMapel, existing, onClose, onSave }) {
 }
 
 /* ================= ADMIN ================= */
-function AdminView({ groupList, saveStageEntry, deleteStageEntry, deleteGroup, saveScore, saveSettings, addAdmin, saveKelasPin, kelasPins, scores, authUser, showToast }) {
+function AdminView({ groupList, saveStageEntry, deleteStageEntry, deleteGroup, saveScore, saveSettings, addAdmin, saveKelasPin, kelasPins, saveTemplate, templates, scores, authUser, showToast }) {
   const [tab, setTab] = useState("kelompok");
   const [editTarget, setEditTarget] = useState(null);
   const [guruPin, setGuruPin] = useState("");
@@ -608,6 +657,15 @@ function AdminView({ groupList, saveStageEntry, deleteStageEntry, deleteGroup, s
             </div>
           </div>
           <div style={{ borderTop: "1px solid #eae6da", paddingTop: 16 }}>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>Template Dokumen</div>
+            <p style={{ fontSize: 12, color: "#8a857a", marginBottom: 10 }}>Tempel link Google Drive template/contoh untuk tahap yang butuh format baku (laporan, spreadsheet, dsb). Siswa akan lihat tombol "Buka template" saat mengisi tahap itu. Kosongkan kalau tidak perlu.</p>
+            <div style={{ display: "grid", gap: 8 }}>
+              {STAGES.map((s) => (
+                <TemplateRow key={s.id} stage={s} existing={templates?.[s.id]?.link || ""} onSave={(link) => saveTemplate(s.id, link)} showToast={showToast} />
+              ))}
+            </div>
+          </div>
+          <div style={{ borderTop: "1px solid #eae6da", paddingTop: 16 }}>
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>PIN Guru</div>
             <div style={{ display: "grid", gap: 12 }}>
               <Field label="PIN angka baru (berlaku untuk semua mapel guru)"><input value={guruPin} onChange={(e) => setGuruPin(e.target.value)} placeholder="cth. 654321" style={inputStyle} /></Field>
@@ -638,12 +696,10 @@ function AdminView({ groupList, saveStageEntry, deleteStageEntry, deleteGroup, s
 function AdminEditSheet({ group, stage, existing, onClose, onSave, onDelete }) {
   const [link, setLink] = useState(existing?.link || ""); const [catatan, setCatatan] = useState(existing?.catatan || "");
   const [beratTotal, setBeratTotal] = useState(existing?.beratTotal || ""); const [rasioCN, setRasioCN] = useState(existing?.rasioCN || ""); const [kadarAir, setKadarAir] = useState(existing?.kadarAir || "");
-  const [skorKelas, setSkorKelas] = useState(existing?.skorKelas || ""); const [skorLingkungan, setSkorLingkungan] = useState(existing?.skorLingkungan || "");
   const [walikelasHadir, setWalikelasHadir] = useState(existing?.walikelasHadir || false);
   function submit() {
     const entry = { link: link.trim(), catatan: catatan.trim(), walikelasHadir, waktu: new Date().toISOString() };
     if (stage.id === "kandungan") Object.assign(entry, { beratTotal, rasioCN, kadarAir });
-    if (stage.id === "kebersihan") Object.assign(entry, { skorKelas, skorLingkungan });
     onSave(entry);
   }
   return (
@@ -658,10 +714,6 @@ function AdminEditSheet({ group, stage, existing, onClose, onSave, onDelete }) {
           <Field label="Rasio C:N"><input value={rasioCN} onChange={(e) => setRasioCN(e.target.value)} style={inputStyle} /></Field>
           <Field label="Kadar Air"><input value={kadarAir} onChange={(e) => setKadarAir(e.target.value)} style={inputStyle} /></Field>
         </div>)}
-        {stage.id === "kebersihan" && (<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <Field label="Skor Kelas"><input value={skorKelas} onChange={(e) => setSkorKelas(e.target.value)} style={inputStyle} /></Field>
-          <Field label="Skor Lingkungan"><input value={skorLingkungan} onChange={(e) => setSkorLingkungan(e.target.value)} style={inputStyle} /></Field>
-        </div>)}
         <Field label="Link bukti"><input value={link} onChange={(e) => setLink(e.target.value)} style={inputStyle} /></Field>
         <Field label="Catatan"><textarea value={catatan} onChange={(e) => setCatatan(e.target.value)} rows={3} style={{ ...inputStyle, resize: "vertical" }} /></Field>
         <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}><input type="checkbox" checked={walikelasHadir} onChange={(e) => setWalikelasHadir(e.target.checked)} /><span style={{ fontSize: 12.5 }}>Diverifikasi wali kelas</span></label>
@@ -671,5 +723,24 @@ function AdminEditSheet({ group, stage, existing, onClose, onSave, onDelete }) {
         </div>
       </div>
     </Sheet>
+  );
+}
+
+function TemplateRow({ stage, existing, onSave, showToast }) {
+  const [val, setVal] = useState(existing);
+  const dirty = val !== existing;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span style={{ width: 22, fontSize: 15, flexShrink: 0 }}>{stage.icon}</span>
+      <span style={{ width: 110, flexShrink: 0, fontSize: 12.5, fontWeight: 700, color: "#5a564c" }}>{stage.short}</span>
+      <input value={val} onChange={(e) => setVal(e.target.value)} placeholder="https://drive.google.com/... (opsional)" style={{ ...inputStyle, flex: 1 }} />
+      <button
+        onClick={() => { onSave(val.trim()); showToast(`Template ${stage.short} disimpan ✓`); }}
+        disabled={!dirty}
+        style={{ padding: "9px 12px", borderRadius: 8, border: "none", background: dirty ? "#3d6b52" : "#e4e0d3", color: "#fff", fontSize: 12, fontWeight: 700, cursor: dirty ? "pointer" : "default", flexShrink: 0 }}
+      >
+        Simpan
+      </button>
+    </div>
   );
 }
